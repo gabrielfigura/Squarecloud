@@ -2,7 +2,7 @@ import requests
 import json
 import logging
 import os
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Updater, CommandHandler
 from datetime import datetime, timezone
 
 # Configuração de logging
@@ -40,7 +40,7 @@ gale_active = False
 last_bet = None
 last_pattern_id = None
 
-async def fetch_latest_game():
+def fetch_latest_game():
     """Busca os dados mais recentes da API do CasinoScores."""
     try:
         response = requests.get(API_URL, timeout=5)
@@ -129,7 +129,7 @@ def determine_bet(pattern):
         return "Banker" if pattern['sequencia'][-2] == "🔴" else "Player"
     return None
 
-async def send_signal(context, pattern, bet):
+def send_signal(update, context, pattern, bet):
     """Envia o sinal de aposta no Telegram."""
     global last_message_id, last_bet, last_pattern_id
     bet_emoji = "🔴" if bet == "Banker" else "🔵"
@@ -142,15 +142,15 @@ async def send_signal(context, pattern, bet):
     )
     if last_message_id:
         try:
-            await context.bot.delete_message(chat_id=CHAT_ID, message_id=last_message_id)
-        except telegram.error.TelegramError as e:
+            context.bot.delete_message(chat_id=CHAT_ID, message_id=last_message_id)
+        except Exception as e:
             logger.error(f"Erro ao deletar mensagem: {e}")
-    sent_message = await context.bot.send_message(chat_id=CHAT_ID, text=message)
+    sent_message = context.bot.send_message(chat_id=CHAT_ID, text=message)
     last_bet = bet
     last_pattern_id = pattern['id']
     last_message_id = sent_message.message_id
 
-async def validate_bet(context, game_data):
+def validate_bet(context, game_data):
     """Valida o resultado da aposta."""
     global current_streak, gale_active, last_bet, last_pattern_id
     outcome = game_data['data']['result']['outcome']
@@ -174,14 +174,14 @@ async def validate_bet(context, game_data):
             current_streak = 0
             gale_active = False
     
-    await context.bot.send_message(chat_id=CHAT_ID, text=message)
+    context.bot.send_message(chat_id=CHAT_ID, text=message)
     last_bet = None
     last_pattern_id = None
 
-async def monitor_table(context):
+def monitor_table(context):
     """Monitora a mesa e envia sinais quando necessário."""
     global last_game_id, last_message_id
-    game_data = await fetch_latest_game()
+    game_data = fetch_latest_game()
     if not game_data:
         return
     
@@ -198,49 +198,50 @@ async def monitor_table(context):
                 now = datetime.now(timezone.utc)
                 time_diff = (now - started_at).total_seconds()
                 if time_diff < 20:
-                    await send_signal(context, pattern, bet)
+                    send_signal(None, context, pattern, bet)
                 else:
                     logger.warning(f"Sinal não enviado: tempo restante insuficiente ({time_diff}s)")
             except KeyError as e:
                 logger.error(f"Erro ao processar startedAt: {e}")
     
     if last_bet and game_data['data']['status'] == "Resolved":
-        await validate_bet(context, game_data)
+        validate_bet(context, game_data)
     
     last_game_id = game_data['id']
     
     if not last_bet and not last_message_id:
         message = "MONITORANDO A MESA🤌"
-        sent_message = await context.bot.send_message(chat_id=CHAT_ID, text=message)
+        sent_message = context.bot.send_message(chat_id=CHAT_ID, text=message)
         last_message_id = sent_message.message_id
 
-async def start(update, context):
+def start(update, context):
     """Comando /start para iniciar o bot."""
-    await update.message.reply_text("Bot de monitoramento de Bac Bo iniciado! 🤌")
+    update.message.reply_text("Bot de monitoramento de Bac Bo iniciado! 🤌")
     context.job_queue.run_repeating(monitor_table, interval=CHECK_INTERVAL, first=0)
 
-async def check_permissions(update, context):
+def check_permissions(update, context):
     """Verifica permissões do bot no chat."""
     try:
-        bot_member = await context.bot.get_chat_member(CHAT_ID, context.bot.id)
+        bot_member = context.bot.get_chat_member(CHAT_ID, context.bot.id)
         if bot_member.can_delete_messages and bot_member.can_post_messages:
-            await update.message.reply_text("Bot tem permissões necessárias (enviar e deletar mensagens). ✅")
+            update.message.reply_text("Bot tem permissões necessárias (enviar e deletar mensagens). ✅")
         else:
-            await update.message.reply_text("Bot não tem permissões suficientes. Verifique se é administrador com permissões para enviar e deletar mensagens. ⚠️")
-    except telegram.error.TelegramError as e:
-        await update.message.reply_text(f"Erro ao verificar permissões: {e}")
+            update.message.reply_text("Bot não tem permissões suficientes. Verifique se é administrador com permissões para enviar e deletar mensagens. ⚠️")
+    except Exception as e:
+        update.message.reply_text(f"Erro ao verificar permissões: {e}")
 
-async def main():
+def main():
     """Função principal do bot."""
     try:
-        app = Application.builder().token(TELEGRAM_TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("check_permissions", check_permissions))
-        await app.run_polling()
+        updater = Updater(TELEGRAM_TOKEN, use_context=True)
+        dp = updater.dispatcher
+        dp.add_handler(CommandHandler("start", start))
+        dp.add_handler(CommandHandler("check_permissions", check_permissions))
+        updater.start_polling()
+        updater.idle()
     except Exception as e:
         logger.error(f"Erro ao iniciar o bot: {e}")
         raise
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
