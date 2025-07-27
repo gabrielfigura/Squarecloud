@@ -1,3 +1,4 @@
+```python
 import requests
 import json
 import logging
@@ -193,13 +194,16 @@ async def monitor_table(context):
     if pattern:
         bet = determine_bet(pattern)
         if bet:
-            started_at = datetime.strptime(game_data['data']['startedAt'], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-            now = datetime.now(timezone.utc)
-            time_diff = (now - started_at).total_seconds()
-            if time_diff < 20:
-                await send_signal(context, pattern, bet)
-            else:
-                logger.warning(f"Sinal não enviado: tempo restante insuficiente ({time_diff}s)")
+            try:
+                started_at = datetime.strptime(game_data['data']['startedAt'], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                time_diff = (now - started_at).total_seconds()
+                if time_diff < 20:
+                    await send_signal(context, pattern, bet)
+                else:
+                    logger.warning(f"Sinal não enviado: tempo restante insuficiente ({time_diff}s)")
+            except KeyError as e:
+                logger.error(f"Erro ao processar startedAt: {e}")
     
     if last_bet and game_data['data']['status'] == "Resolved":
         await validate_bet(context, game_data)
@@ -229,11 +233,16 @@ async def check_permissions(update, context):
 
 async def main():
     """Função principal do bot."""
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check_permissions", check_permissions))
-    await app.run_polling()
+    try:
+        app = Application.builder().token(TELEGRAM_TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("check_permissions", check_permissions))
+        await app.run_polling()
+    except Exception as e:
+        logger.error(f"Erro ao iniciar o bot: {e}")
+        raise
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+```
