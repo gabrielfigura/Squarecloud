@@ -2,7 +2,7 @@ import requests
 import json
 import logging
 import os
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler
 from datetime import datetime, timezone
 
 # Configuração de logging
