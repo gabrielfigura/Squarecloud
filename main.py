@@ -1,4 +1,3 @@
-```python
 import requests
 import json
 import logging
@@ -245,4 +244,3 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
-```
