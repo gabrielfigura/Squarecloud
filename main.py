@@ -1,247 +1,194 @@
 import requests
 import json
+import time
+import asyncio
+from telegram import Bot
+from telegram.error import TelegramError
 import logging
-import os
-from telegram.ext import ApplicationBuilder, CommandHandler
-from datetime import datetime, timezone
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configuração de logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(filename='bot.log', level=logging.INFO, 
+                   format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Configurações
-API_URL = "https://api.casinoscores.com/svc-evolution-game-events/api/bacbo/latest"
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "7703975421:AAG-CG5Who2xs4NlevJqB5TNvjjzeUEDz8o")
+# Configurações do Bot
+BOT_TOKEN = "7703975421:AAG-CG5Who2xs4NlevJqB5TNvjjzeUEDz8o"
 CHAT_ID = "-1002859771274"
-CHECK_INTERVAL = 5
-PATTERNS_FILE = "patterns.json"
+API_URL = "https://api.casinoscores.com/svc-evolution-game-events/api/bacbo/latest"
+bot = Bot(token=BOT_TOKEN)
 
-# Carregar padrões
-def load_patterns():
+# Lista de padrões
+PADROES = [
+    {"id": 1, "sequencia": ["🔴", "🔴", "🔴"], "acao": "Entrar a favor"},
+    {"id": 2, "sequencia": ["🔵", "🔴", "🔵"], "acao": "Entrar no oposto do último"},
+    {"id": 3, "sequencia": ["🔴", "🔴", "🔵"], "acao": "Entrar contra"},
+    {"id": 4, "sequencia": ["🔵", "🔵", "🔴", "🔴"], "acao": "Entrar no lado que inicia"},
+    {"id": 5, "sequencia": ["🔴", "🔴", "🔴", "🔵"], "acao": "Seguir rompimento"},
+    {"id": 6, "sequencia": ["🔵", "🔵", "🔵"], "acao": "Entrar a favor"},
+    {"id": 7, "sequencia": ["🔴", "🔵", "🔴"], "acao": "Seguir alternância"},
+    {"id": 8, "sequencia": ["🔴", "🔵", "🔵"], "acao": "Seguir nova cor"},
+    {"id": 9, "sequencia": ["🔴", "🔴", "🟡"], "acao": "Seguir 🔴"},
+    {"id": 10, "sequencia": ["🔴", "🔵", "🟡", "🔴"], "acao": "Ignorar Tie e seguir 🔴"},
+    {"id": 11, "sequencia": ["🔵", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 12, "sequencia": ["🔴", "🔵", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 13, "sequencia": ["🔵", "🔵", "🔴", "🔵"], "acao": "Voltar para 🔵"},
+    {"id": 14, "sequencia": ["🔴", "🟡", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 15, "sequencia": ["🔴", "🔴", "🔴", "🔴"], "acao": "Entrar a favor"},
+    {"id": 16, "sequencia": ["🔵", "🔵", "🔵", "🔴"], "acao": "Entrar contra 🔴"},
+    {"id": 17, "sequencia": ["🔴", "🔵", "🔴", "🔵"], "acao": "Seguir alternância"},
+    {"id": 18, "sequencia": ["🔴", "🔵", "🔵", "🔴"], "acao": "Entrar contra 🔵"},
+    {"id": 19, "sequencia": ["🔵", "🟡", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 20, "sequencia": ["🔴", "🔵", "🟡", "🔵", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 21, "sequencia": ["🔵", "🔵", "🔴", "🔴", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 22, "sequencia": ["🔴", "🔴", "🔵", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 23, "sequencia": ["🔵", "🔴", "🔵", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 24, "sequencia": ["🔴", "🔵", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 25, "sequencia": ["🔴", "🔴", "🔴", "🟡", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 26, "sequencia": ["🔵", "🔴", "🔴", "🔵", "🔵"], "acao": "Seguir pares"},
+    {"id": 27, "sequencia": ["🔴", "🟡", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 28, "sequencia": ["🔵", "🔵", "🟡", "🔵", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 29, "sequencia": ["🔴", "🔴", "🔵", "🔵", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 30, "sequencia": ["🔵", "🔵", "🔴", "🔵", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 31, "sequencia": ["🔴", "🔴", "🔴", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 32, "sequencia": ["🔵", "🔴", "🔵", "🔴", "🔵"], "acao": "Seguir alternância"},
+    {"id": 33, "sequencia": ["🔴", "🔵", "🔴", "🟡", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 34, "sequencia": ["🔵", "🔵", "🔴", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 35, "sequencia": ["🔴", "🟡", "🔴", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 36, "sequencia": ["🔴", "🔴", "🟡", "🔵", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 37, "sequencia": ["🔵", "🔴", "🟡", "🔵", "🔴"], "acao": "Seguir alternância"},
+    {"id": 38, "sequencia": ["🔴", "🔴", "🔴", "🔵", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 39, "sequencia": ["🔵", "🔵", "🔵", "🔴", "🔵"], "acao": "Voltar para 🔵"},
+    {"id": 40, "sequencia": ["🔴", "🔴", "🔴", "🟡", "🔵", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 41, "sequencia": ["🔴", "🔵", "🔴", "🔴", "🔵"], "acao": "Seguir 🔵"},
+    {"id": 42, "sequencia": ["🔵", "🔴", "🔴", "🔵", "🔵", "🔴", "🔴"], "acao": "Seguir pares"},
+    {"id": 43, "sequencia": ["🔴", "🔴", "🔵", "🔵", "🔴", "🔴"], "acao": "Seguir ciclo"},
+    {"id": 44, "sequencia": ["🔵", "🔴", "🔴", "🔴", "🔵"], "acao": "Seguir 🔴"},
+    {"id": 45, "sequencia": ["🔴", "🔵", "🟡", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 46, "sequencia": ["🔴", "🔴", "🔵", "🔵", "🔴", "🔴", "🔵", "🔵"], "acao": "Seguir pares"},
+    {"id": 47, "sequencia": ["🔵", "🔵", "🔵", "🔴", "🔴", "🔴", "🔵"], "acao": "Novo início"},
+    {"id": 48, "sequencia": ["🔴", "🔴", "🔴", "🔵", "🔴", "🔴"], "acao": "Seguir 🔴"},
+    {"id": 49, "sequencia": ["🔵", "🔴", "🔴", "🔵", "🔵", "🔴", "🔴"], "acao": "Seguir padrão 2x"},
+    {"id": 50, "sequencia": ["🔴", "🔴", "🟡", "🔵", "🔵", "🔴"], "acao": "Seguir 🔴"}
+]
+
+historico_resultados = []
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def obter_resultado():
     try:
-        with open(PATTERNS_FILE, 'r') as f:
-            patterns = json.load(f)
-        for pattern in patterns:
-            if not all(emoji in ["🔴", "🔵", "🟡"] for emoji in pattern['sequencia']):
-                logger.error(f"Padrão inválido detectado: {pattern['id']}")
-                raise ValueError(f"Padrão inválido: {pattern['id']}")
-        return patterns
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.error(f"Erro ao carregar padrões: {e}")
-        raise
+        print("Tentando buscar resultado da API...")
+        logging.info("Tentando buscar resultado da API...")
+        headers = {"User-Agent": "Mozilla/5.0"}  # Adicionado para evitar bloqueios
+        resposta = requests.get(API_URL, timeout=5, headers=headers)
+        resposta.raise_for_status()  # Levanta exceção para status diferente de 200
+        dados = resposta.json()
+        
+        print(f"Resposta da API: {json.dumps(dados, indent=2)}")
+        logging.info(f"Resposta da API: {json.dumps(dados, indent=2)}")
+        
+        if not dados or not isinstance(dados, list):
+            print("API retornou dados inválidos ou lista vazia")
+            logging.error("API retornou dados inválidos ou lista vazia")
+            return None, None
+            
+        latest_event = dados[0]
+        if not isinstance(latest_event, dict):
+            print("Primeiro item da API não é um dicionário")
+            logging.error("Primeiro item da API não é um dicionário")
+            return None, None
 
-PATTERNS = load_patterns()
+        if 'playerScore' not in latest_event or 'bankerScore' not in latest_event:
+            print(f"Chaves ausentes no evento: {latest_event.keys()}")
+            logging.error(f"Chaves ausentes no evento: {latest_event.keys()}")
+            return None, None
 
-# Estado
-last_game_id = None
-current_streak = 0
-last_message_id = None
-gale_active = False
-last_bet = None
-last_pattern_id = None
+        player_score = latest_event['playerScore']
+        banker_score = latest_event['bankerScore']
+        print(f"Player Score: {player_score}, Banker Score: {banker_score}")
+        logging.info(f"Player Score: {player_score}, Banker Score: {banker_score}")
 
-def fetch_latest_game():
-    """Busca os dados mais recentes da API do CasinoScores."""
-    try:
-        response = requests.get(API_URL, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        if data['id'] == last_game_id:
-            return None
-        return data
-    except requests.RequestException as e:
-        logger.error(f"Erro ao buscar dados da API: {e}")
-        return None
-
-def load_game_history():
-    """Carrega o histórico de jogos."""
-    try:
-        with open('game_history.json', 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-def save_game_history(history):
-    """Salva o histórico de jogos."""
-    history = history[-100:]  # Limita a 100 rodadas
-    try:
-        with open('game_history.json', 'w') as f:
-            json.dump(history, f)
-    except IOError as e:
-        logger.error(f"Erro ao salvar histórico: {e}")
-
-def map_outcome_to_emoji(outcome):
-    """Mapeia o resultado do jogo para emoji."""
-    if outcome == "BankerWon":
-        return "🔴"
-    elif outcome == "PlayerWon":
-        return "🔵"
-    elif outcome == "Tie":
-        return "🟡"
-    return None
-
-def check_pattern(history):
-    """Verifica se algum padrão foi detectado no histórico."""
-    history_emojis = [map_outcome_to_emoji(game['data']['result']['outcome']) for game in history][-10:]
-    matched_patterns = []
-    for pattern in PATTERNS:
-        pattern_seq = pattern['sequencia']
-        if len(history_emojis) >= len(pattern_seq) and history_emojis[-len(pattern_seq):] == pattern_seq:
-            matched_patterns.append((pattern, len(pattern_seq)))
-    if matched_patterns:
-        return max(matched_patterns, key=lambda x: x[1])[0]  # Escolhe o padrão mais longo
-    return None
-
-def determine_bet(pattern):
-    """Determina a aposta com base na ação do padrão."""
-    action = pattern['acao']
-    last_result = pattern['sequencia'][-1]
-    
-    if action == "Entrar a favor":
-        return "Banker" if last_result == "🔴" else "Player"
-    elif action == "Entrar no oposto do último":
-        return "Player" if last_result == "🔴" else "Banker"
-    elif action == "Entrar contra":
-        return "Player" if last_result == "🔴" else "Banker"
-    elif action == "Entrar no lado que inicia":
-        return "Banker" if pattern['sequencia'][0] == "🔴" else "Player"
-    elif action == "Seguir rompimento":
-        return "Player" if last_result == "🔵" else "Banker"
-    elif action == "Seguir alternância":
-        return "Player" if last_result == "🔴" else "Banker"
-    elif action == "Seguir nova cor":
-        return "Player" if last_result == "🔵" else "Banker"
-    elif action == "Seguir 🔴":
-        return "Banker"
-    elif action == "Seguir 🔵":
-        return "Player"
-    elif action == "Ignorar Tie e seguir 🔴":
-        return "Banker"
-    elif action == "Voltar para 🔵":
-        return "Player"
-    elif action == "Seguir pares":
-        return "Banker" if pattern['sequencia'][-2] == "🔴" else "Player"
-    elif action == "Seguir ciclo":
-        return "Banker" if pattern['sequencia'][0] == "🔴" else "Player"
-    elif action == "Novo início":
-        return "Player" if pattern['sequencia'][0] == "🔵" else "Banker"
-    elif action == "Seguir padrão 2x":
-        return "Banker" if pattern['sequencia'][-2] == "🔴" else "Player"
-    return None
-
-def send_signal(update, context, pattern, bet):
-    """Envia o sinal de aposta no Telegram."""
-    global last_message_id, last_bet, last_pattern_id
-    bet_emoji = "🔴" if bet == "Banker" else "🔵"
-    message = (
-        f"ATENÇÃO PADRÃO {pattern['id']} DETECTADO\n"
-        f"Entrar no {bet}: {bet_emoji}\n"
-        "Proteger o empate: 🟡\n"
-        "Fazer até 1 gale 🔥\n"
-        "Mais dinheiro e menos amigos 🤏"
-    )
-    if last_message_id:
-        try:
-            context.bot.delete_message(chat_id=CHAT_ID, message_id=last_message_id)
-        except Exception as e:
-            logger.error(f"Erro ao deletar mensagem: {e}")
-    sent_message = context.bot.send_message(chat_id=CHAT_ID, text=message)
-    last_bet = bet
-    last_pattern_id = pattern['id']
-    last_message_id = sent_message.message_id
-
-def validate_bet(context, game_data):
-    """Valida o resultado da aposta."""
-    global current_streak, gale_active, last_bet, last_pattern_id
-    outcome = game_data['data']['result']['outcome']
-    bet_won = (
-        (last_bet == "Banker" and outcome == "BankerWon") or
-        (last_bet == "Player" and outcome == "PlayerWon") or
-        outcome == "Tie"
-    )
-    
-    if bet_won:
-        current_streak += 1
-        message = "Mais Dinheiro no bolso🤌\n"
-        message += f"Placar de acertos: {current_streak} ✅"
-        gale_active = False
-    else:
-        if not gale_active:
-            gale_active = True
-            message = "Vamos entrar no 1 Gale🔥"
+        if player_score > banker_score:
+            return "🔴", latest_event
+        elif banker_score > player_score:
+            return "🔵", latest_event
         else:
-            message = "Perdemos no 1 Gale😔, vamos pegar a outra rodada🤌"
-            current_streak = 0
-            gale_active = False
-    
-    context.bot.send_message(chat_id=CHAT_ID, text=message)
-    last_bet = None
-    last_pattern_id = None
+            return "🟡", latest_event
 
-def monitor_table(context):
-    """Monitora a mesa e envia sinais quando necessário."""
-    global last_game_id, last_message_id
-    game_data = fetch_latest_game()
-    if not game_data:
+    except requests.exceptions.RequestException as e:
+        print(f"Erro ao buscar resultado: {str(e)}")
+        logging.error(f"Erro ao buscar resultado: {str(e)}")
+        raise  # Levanta exceção para o retry do tenacity
+    except KeyError as e:
+        print(f"KeyError na API: {str(e)}")
+        logging.error(f"KeyError na API: {str(e)}")
+        return None, None  # Retorna None para evitar retry em KeyError
+
+def verificar_padroes(historico):
+    print(f"Histórico atual: {historico[-10:]}")
+    logging.info(f"Histórico atual: {historico[-10:]}")
+    for padrao in PADROES:
+        sequencia = padrao["sequencia"]
+        tamanho = len(sequencia)
+        if len(historico) >= tamanho and historico[-tamanho:] == sequencia:
+            print(f"Padrão encontrado: #{padrao['id']}")
+            logging.info(f"Padrão encontrado: #{padrao['id']}")
+            return padrao
+    return None
+
+async def enviar_sinal(padrao):
+    try:
+        mensagem = f"""
+📊 *Sinal Detectado*
+Padrão #{padrao['id']}
+Sequência: {' '.join(padrao['sequencia'])}
+🎯 Ação: *{padrao['acao']}*
+"""
+        print(f"Enviando sinal: Padrão #{padrao['id']}")
+        await bot.send_message(chat_id=CHAT_ID, text=mensagem, parse_mode="Markdown")
+        logging.info(f"Sinal enviado: Padrão #{padrao['id']}")
+    except TelegramError as e:
+        print(f"Erro ao enviar sinal: {str(e)}")
+        logging.error(f"Erro ao enviar sinal: {str(e)}")
+
+async def iniciar_monitoramento():
+    print("Iniciando monitoramento")
+    logging.info("Iniciando monitoramento")
+    try:
+        print("Verificando conexão com o Telegram...")
+        await bot.get_me()
+        print("Bot inicializado com sucesso")
+        logging.info("Bot inicializado com sucesso")
+        # Enviar mensagem de inicialização ao Telegram
+        await bot.send_message(chat_id=CHAT_ID, text="✅ Bot inicializado com sucesso!", parse_mode="Markdown")
+    except TelegramError as e:
+        print(f"Erro ao inicializar bot: {str(e)}")
+        logging.error(f"Erro ao inicializar bot: {str(e)}")
         return
-    
-    history = load_game_history()
-    history.append(game_data)
-    save_game_history(history)
-    
-    pattern = check_pattern(history)
-    if pattern:
-        bet = determine_bet(pattern)
-        if bet:
-            try:
-                started_at = datetime.strptime(game_data['data']['startedAt'], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-                now = datetime.now(timezone.utc)
-                time_diff = (now - started_at).total_seconds()
-                if time_diff < 20:
-                    send_signal(None, context, pattern, bet)
-                else:
-                    logger.warning(f"Sinal não enviado: tempo restante insuficiente ({time_diff}s)")
-            except KeyError as e:
-                logger.error(f"Erro ao processar startedAt: {e}")
-    
-    if last_bet and game_data['data']['status'] == "Resolved":
-        validate_bet(context, game_data)
-    
-    last_game_id = game_data['id']
-    
-    if not last_bet and not last_message_id:
-        message = "MONITORANDO A MESA🤌"
-        sent_message = context.bot.send_message(chat_id=CHAT_ID, text=message)
-        last_message_id = sent_message.message_id
 
-def start(update, context):
-    """Comando /start para iniciar o bot."""
-    update.message.reply_text("Bot de monitoramento de Bac Bo iniciado! 🤌")
-    context.job_queue.run_repeating(monitor_table, interval=CHECK_INTERVAL, first=0)
+    ultimo_resultado = None
+    while True:
+        try:
+            resultado, event_data = obter_resultado()
+            # Verificar se o resultado é válido (ignorar resultados incompletos)
+            if resultado and resultado != ultimo_resultado:
+                # Aqui, idealmente, precisaríamos verificar o status da rodada
+                # Como a API não fornece, assumimos que o resultado é final
+                ultimo_resultado = resultado
+                historico_resultados.append(resultado)
+                print(f"Resultado: {resultado}")
+                logging.info(f"Resultado: {resultado}")
+                if len(historico_resultados) > 50:
+                    historico_resultados.pop(0)
 
-def check_permissions(update, context):
-    """Verifica permissões do bot no chat."""
-    try:
-        bot_member = context.bot.get_chat_member(CHAT_ID, context.bot.id)
-        if bot_member.can_delete_messages and bot_member.can_post_messages:
-            update.message.reply_text("Bot tem permissões necessárias (enviar e deletar mensagens). ✅")
-        else:
-            update.message.reply_text("Bot não tem permissões suficientes. Verifique se é administrador com permissões para enviar e deletar mensagens. ⚠️")
-    except Exception as e:
-        update.message.reply_text(f"Erro ao verificar permissões: {e}")
+                padrao = verificar_padroes(historico_resultados)
+                if padrao:
+                    await enviar_sinal(padrao)
 
-def main():
-    """Função principal do bot."""
-    try:
-        updater = Updater(TELEGRAM_TOKEN, use_context=True)
-        dp = updater.dispatcher
-        dp.add_handler(CommandHandler("start", start))
-        dp.add_handler(CommandHandler("check_permissions", check_permissions))
-        updater.start_polling()
-        updater.idle()
-    except Exception as e:
-        logger.error(f"Erro ao iniciar o bot: {e}")
-        raise
+            time.sleep(5)  # Intervalo de 5 segundos
+        except Exception as e:
+            print(f"Erro no loop principal: {str(e)}")
+            logging.error(f"Erro no loop principal: {str(e)}")
+            time.sleep(10)  # Espera maior em caso de erro
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(iniciar_monitoramento())
